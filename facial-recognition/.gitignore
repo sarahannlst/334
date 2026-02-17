@@ -1,0 +1,23 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# dlib model (large file; download separately - see README)
+shape_predictor_68_face_landmarks.dat
+*.dat.bz2
+
+# IDE / OS
+.idea/
+.DS_Store
+*.swp
+*.swo
