@@ -1,4 +1,6 @@
+import argparse
 import collections
+import sys
 import time
 from typing import Deque, Dict, Optional, Tuple
 
@@ -285,7 +287,8 @@ def _collect_calibration_samples(
         if not ret:
             print(f"Error: Failed to read frame during {expression_name} calibration.")
             return None
-        
+        frame = cv2.flip(frame, 1)
+
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(
             gray,
@@ -484,10 +487,89 @@ def calibrate_baseline(
     return True
 
 
-def main():
-    cap = cv2.VideoCapture(0)
+def debug_cameras() -> None:
+    """
+    Try each camera index and report whether it opens and whether frames can be read.
+    Run with: python main.py --debug-camera
+    """
+    print("Camera diagnostic: trying indices 0–4 (OpenCV default backend).\n")
+    for index in range(5):
+        cap = cv2.VideoCapture(index)
+        opened = cap.isOpened()
+        if not opened:
+            print(f"  Camera {index}: did not open")
+            continue
+        # Try to read a few frames; some devices open but never return frames
+        read_ok = False
+        for attempt in range(20):
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                read_ok = True
+                h, w = frame.shape[:2]
+                print(f"  Camera {index}: opened, reads frames OK (size {w}x{h})")
+                break
+        if not read_ok:
+            print(f"  Camera {index}: opened but failed to read any frame (e.g. Continuity Camera on macOS)")
+        cap.release()
+    print("\nIf no camera 'reads frames OK', try:")
+    print("  - macOS: disconnect Continuity Camera or pick built-in camera in System Settings > Camera")
+    print("  - Grant camera permission to Terminal/IDE in System Settings > Privacy & Security > Camera")
+    print("  - Close other apps using the camera.")
 
-    if not cap.isOpened():
+
+def _show_webcam_error_window() -> None:
+    """Show a window with webcam error message so the user sees something instead of no window."""
+    width, height = 640, 320
+    img = np.zeros((height, width, 3), dtype=np.uint8)
+    img[:] = (40, 40, 40)
+    lines = [
+        "Webcam could not deliver any frames.",
+        "",
+        "Another app may be using the camera (Zoom, FaceTime,",
+        "Photo Booth, browser, etc.). Close it and try again.",
+        "",
+        "On macOS: disconnect Continuity Camera (iPhone)",
+        "or choose built-in camera in System Settings > Camera.",
+        "",
+        "Check camera permission for Terminal/IDE in",
+        "System Settings > Privacy & Security > Camera.",
+        "",
+        "Run:  python main.py --debug-camera  to diagnose.",
+        "",
+        "Press any key to close.",
+    ]
+    y = 28
+    for line in lines:
+        cv2.putText(img, line, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        y += 22
+    cv2.imshow("Facial Emotion Demo", img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+
+def _open_webcam() -> Optional[cv2.VideoCapture]:
+    """
+    Try to open a working webcam. On macOS, index 0 may be a Continuity Camera
+    or external device that opens but fails to deliver frames; we try indices 0, 1, 2.
+    """
+    for index in (0, 1, 2):
+        cap = cv2.VideoCapture(index)
+        if not cap.isOpened():
+            cap.release()
+            continue
+        # Verify we can actually read a frame (some devices open but don't deliver frames)
+        for _ in range(15):
+            ret, _ = cap.read()
+            if ret:
+                return cap
+        cap.release()
+    return None
+
+
+def main():
+    cap = _open_webcam()
+
+    if cap is None:
         print("Error: Could not open webcam.")
         return
 
@@ -524,11 +606,27 @@ def main():
     history_height = 40
     history_strip = None  # lazily initialized when we know frame width
 
+    consecutive_failures = 0
+    max_failures = 30  # ~1 second at 30 fps before giving up
+
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("Warning: Failed to read frame from webcam.")
-            break
+            consecutive_failures += 1
+            if consecutive_failures == 1:
+                print("Warning: Failed to read frame from webcam (retrying...).")
+            if consecutive_failures >= max_failures:
+                print("\nError: Webcam stopped returning frames.")
+                print("  - On macOS with Continuity Camera: try disconnecting the iPhone or")
+                print("    use a different camera in System Settings > Camera.")
+                print("  - Close other apps using the camera and run this script again.")
+                # Show an error window so something pops up (the main window never appears
+                # because it is only drawn after we get a valid frame).
+                _show_webcam_error_window()
+                break
+            continue
+        consecutive_failures = 0
+        frame = cv2.flip(frame, 1)
 
         # Initialize history strip once we know frame size
         if history_strip is None:
@@ -647,4 +745,14 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Facial expression recognition from webcam.")
+    parser.add_argument(
+        "--debug-camera",
+        action="store_true",
+        help="Run camera diagnostic (which indices open and deliver frames), then exit.",
+    )
+    args = parser.parse_args()
+    if args.debug_camera:
+        debug_cameras()
+        sys.exit(0)
     main()
