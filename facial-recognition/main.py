@@ -1,7 +1,9 @@
 import argparse
 import collections
+import os
 import sys
 import time
+from datetime import datetime
 from typing import Deque, Dict, Optional, Tuple
 
 import cv2
@@ -11,9 +13,9 @@ import numpy as np
 
 EMOTION_COLORS: Dict[str, tuple] = {
     "none": (50, 50, 50),       # dark gray
-    "neutral": (255, 0, 0),     # blue (BGR)
-    "happy": (0, 255, 255),     # yellow (BGR)
-    "angry": (0, 0, 255),       # red (BGR)
+    "neutral": (15, 106, 55),   # sage green (BGR)
+    "happy": (0, 200, 255),       # marigold (BGR)
+    "angry": (60, 20, 200),       # deep rose (BGR)
 }
 
 
@@ -255,6 +257,30 @@ def majority_vote(labels: Deque[str]) -> str:
     return counter.most_common(1)[0][0]
 
 
+# Display text for each calibration expression (centered on screen)
+_CALIBRATION_DISPLAY: Dict[str, str] = {
+    "neutral": "Straight face",
+    "happy": "Smile",
+    "angry": "Frown",
+}
+
+
+def _draw_centered_text(
+    frame: np.ndarray,
+    text: str,
+    y: int,
+    font: int = cv2.FONT_HERSHEY_SIMPLEX,
+    font_scale: float = 0.7,
+    color: Tuple[int, int, int] = (255, 255, 255),
+    thickness: int = 2,
+) -> None:
+    """Draw a single line of text centered horizontally on the frame."""
+    (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+    w = frame.shape[1]
+    x = (w - tw) // 2
+    cv2.putText(frame, text, (x, y), font, font_scale, color, thickness, cv2.LINE_AA)
+
+
 def _collect_calibration_samples(
     cap: cv2.VideoCapture,
     face_cascade: cv2.CascadeClassifier,
@@ -263,9 +289,10 @@ def _collect_calibration_samples(
     step_number: int,
     total_steps: int,
 ) -> Optional[Tuple[float, float, float, float, float]]:
-    """Collect samples for a specific expression. User presses SPACE or ENTER when ready."""
+    """Collect 5 samples for a specific expression. User presses SPACE to start; 5 frames are captured automatically."""
+    display_label = _CALIBRATION_DISPLAY.get(expression_name.lower(), expression_name)
     print(f"\n=== {expression_name.upper()} CALIBRATION (Step {step_number}/{total_steps}) ===")
-    print(f"Make a {expression_name.upper()} expression, then press SPACE or ENTER when ready to capture.")
+    print(f"Show a {display_label.lower()}, then press SPACE or ENTER to capture 5 frames.")
     print("Press 'q' to cancel calibration.")
     
     samples = []
@@ -289,6 +316,7 @@ def _collect_calibration_samples(
             return None
         
         frame = cv2.flip(frame, 1)  # Flip horizontally to match main view
+        h_f, w_f = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(
             gray,
@@ -306,75 +334,24 @@ def _collect_calibration_samples(
                 face_roi_gray, predictor
             )
             
-            # Collect samples while collecting flag is True
+            # Collect 5 samples automatically once user has pressed SPACE
             if collecting and frame_count % frame_interval == 0:
                 samples.append((eyebrow_height, mouth_width, mouth_height, mouth_curvature, eye_openness))
+                if len(samples) >= 5:
+                    break
             
             cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
             
-            # Show different messages based on state
+            # Center text vertically in the frame
+            line_height = 36
+            block_start = (h_f // 2) - (line_height * 2)  # roughly center 3 lines
             if not collecting:
-                cv2.putText(
-                    frame,
-                    f"Step {step_number}/{total_steps}: {expression_name.upper()}",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.0,
-                    color,
-                    2,
-                    cv2.LINE_AA,
-                )
-                cv2.putText(
-                    frame,
-                    f"Make a {expression_name.upper()} expression",
-                    (10, 70),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-                cv2.putText(
-                    frame,
-                    "Press SPACE or ENTER to start capturing",
-                    (10, 110),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
+                _draw_centered_text(frame, f"Step {step_number}/{total_steps}", block_start, font_scale=0.9, color=color)
+                _draw_centered_text(frame, display_label, block_start + line_height)
+                _draw_centered_text(frame, "Press SPACE or ENTER to capture 5 frames", block_start + line_height * 2, font_scale=0.6, color=(0, 255, 255))
             else:
-                cv2.putText(
-                    frame,
-                    f"Capturing {expression_name.upper()}...",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.0,
-                    color,
-                    2,
-                    cv2.LINE_AA,
-                )
-                cv2.putText(
-                    frame,
-                    f"Keep the {expression_name.upper()} expression",
-                    (10, 70),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-                cv2.putText(
-                    frame,
-                    f"Samples: {len(samples)} | Press SPACE/ENTER when done",
-                    (10, 110),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
+                _draw_centered_text(frame, f"Capturing {display_label}...", block_start, font_scale=0.9, color=color)
+                _draw_centered_text(frame, f"Frames: {len(samples)} / 5", block_start + line_height, font_scale=0.7, color=(0, 255, 255))
         
         cv2.imshow("Calibration", frame)
         
@@ -383,19 +360,11 @@ def _collect_calibration_samples(
             print(f"Calibration cancelled.")
             cv2.destroyWindow("Calibration")
             return None
-        elif key == ord(" ") or key == 13:  # SPACE or ENTER
-            if not collecting:
-                # Start collecting samples
-                collecting = True
-                samples = []  # Reset samples
-                frame_count = 0
-                print(f"Collecting samples for {expression_name}...")
-            else:
-                # Stop collecting and finish
-                if len(samples) >= 5:
-                    break
-                else:
-                    print(f"Need at least 5 samples. Currently have {len(samples)}. Keep collecting...")
+        elif (key == ord(" ") or key == 13) and not collecting:
+            collecting = True
+            samples = []
+            frame_count = 0
+            print(f"Capturing 5 frames for {expression_name}...")
         
         frame_count += 1
     
@@ -429,10 +398,8 @@ def calibrate_baseline(
     print("CALIBRATION MODE")
     print("="*50)
     print("For each expression:")
-    print("  1. Make the expression")
-    print("  2. Press SPACE or ENTER to start capturing")
-    print("  3. Hold the expression")
-    print("  4. Press SPACE or ENTER again when done")
+    print("  1. Show the expression (straight face, smile, or frown)")
+    print("  2. Press SPACE or ENTER to capture 5 frames automatically")
     print("  5. Press 'q' at any time to cancel")
     print("="*50 + "\n")
     
@@ -547,6 +514,341 @@ def _show_webcam_error_window() -> None:
     cv2.destroyAllWindows()
 
 
+# Global variable for mouse callback
+_start_button_clicked = False
+
+
+def _welcome_mouse_callback(event, x, y, flags, param):
+    """Mouse callback for welcome screen start button."""
+    global _start_button_clicked
+    if event == cv2.EVENT_LBUTTONDOWN:
+        # Button coordinates: (center_x - 100, center_y + 100) to (center_x + 100, center_y + 150)
+        button_x1, button_y1 = param['button_x1'], param['button_y1']
+        button_x2, button_y2 = param['button_x2'], param['button_y2']
+        if button_x1 <= x <= button_x2 and button_y1 <= y <= button_y2:
+            _start_button_clicked = True
+
+
+def show_welcome_screen() -> bool:
+    """
+    Display welcome screen with start button.
+    Returns True if start button was clicked, False if user closed window.
+    """
+    global _start_button_clicked
+    _start_button_clicked = False
+    
+    width, height = 800, 600
+    window_name = "Plant a Flower - Welcome"
+    
+    # Button dimensions
+    button_width = 200
+    button_height = 60
+    button_x1 = (width - button_width) // 2
+    button_y1 = height - 120  # Moved lower to avoid overlap
+    button_x2 = button_x1 + button_width
+    button_y2 = button_y1 + button_height
+    
+    # Set up mouse callback
+    cv2.namedWindow(window_name)
+    cv2.setMouseCallback(
+        window_name,
+        _welcome_mouse_callback,
+        {
+            'button_x1': button_x1,
+            'button_y1': button_y1,
+            'button_x2': button_x2,
+            'button_y2': button_y2,
+        }
+    )
+    
+    while True:
+        # Create welcome screen image
+        img = np.zeros((height, width, 3), dtype=np.uint8)
+        img[:] = (40, 40, 40)  # Dark gray background
+        
+        # Welcome message
+        message_lines = [
+            "Hello and welcome to Plant a Flower!",
+            "",
+            "By clicking start, you consent to the",
+            "use of facial recognition software.",
+            "",
+            "Help us grow this garden<3",
+        ]
+        
+        y_offset = 120
+        for i, line in enumerate(message_lines):
+            font_scale = 0.7 if i == 0 else 0.55
+            thickness = 2 if i == 0 else 1
+            # Use FONT_HERSHEY_DUPLEX for a cleaner, more professional look
+            font = cv2.FONT_HERSHEY_DUPLEX
+            text_size = cv2.getTextSize(line, font, font_scale, thickness)[0]
+            x_pos = (width - text_size[0]) // 2
+            cv2.putText(
+                img,
+                line,
+                (x_pos, y_offset + i * 45),
+                font,
+                font_scale,
+                (255, 255, 255),
+                thickness,
+                cv2.LINE_AA,
+            )
+        
+        # Draw start button
+        button_color = (0, 200, 0) if not _start_button_clicked else (0, 150, 0)
+        cv2.rectangle(
+            img,
+            (button_x1, button_y1),
+            (button_x2, button_y2),
+            button_color,
+            -1,
+        )
+        cv2.rectangle(
+            img,
+            (button_x1, button_y1),
+            (button_x2, button_y2),
+            (255, 255, 255),
+            2,
+        )
+        
+        # Button text
+        button_text = "START"
+        font = cv2.FONT_HERSHEY_DUPLEX  # Use cleaner font
+        text_size = cv2.getTextSize(button_text, font, 0.9, 2)[0]
+        text_x = button_x1 + (button_width - text_size[0]) // 2
+        text_y = button_y1 + (button_height + text_size[1]) // 2
+        cv2.putText(
+            img,
+            button_text,
+            (text_x, text_y),
+            font,
+            0.9,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        
+        cv2.imshow(window_name, img)
+        
+        key = cv2.waitKey(1) & 0xFF
+        if key == 27:  # ESC key
+            cv2.destroyWindow(window_name)
+            return False
+        
+        if _start_button_clicked:
+            cv2.destroyWindow(window_name)
+            return True
+
+
+def get_user_name() -> Optional[str]:
+    """
+    Display name input screen and collect user name via keyboard.
+    Returns the name string or None if cancelled.
+    """
+    width, height = 600, 300
+    window_name = "Enter Your Name"
+    
+    user_name = ""
+    
+    cv2.namedWindow(window_name)
+    
+    while True:
+        # Create input screen image
+        img = np.zeros((height, width, 3), dtype=np.uint8)
+        img[:] = (40, 40, 40)  # Dark gray background
+        
+        # Instructions
+        instruction = "Enter your name:"
+        font = cv2.FONT_HERSHEY_DUPLEX  # Use cleaner font
+        text_size = cv2.getTextSize(instruction, font, 0.65, 2)[0]
+        x_pos = (width - text_size[0]) // 2
+        cv2.putText(
+            img,
+            instruction,
+            (x_pos, 80),
+            font,
+            0.65,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        
+        # Display entered name
+        display_text = user_name + "_" if len(user_name) > 0 else "_"
+        name_size = cv2.getTextSize(display_text, font, 0.9, 2)[0]
+        name_x = (width - name_size[0]) // 2
+        cv2.putText(
+            img,
+            display_text,
+            (name_x, 150),
+            font,
+            0.9,
+            (0, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        
+        # Instructions
+        hint = "Press ENTER to confirm, ESC to cancel, Backspace to delete"
+        hint_size = cv2.getTextSize(hint, font, 0.5, 1)[0]
+        hint_x = (width - hint_size[0]) // 2
+        cv2.putText(
+            img,
+            hint,
+            (hint_x, 220),
+            font,
+            0.5,
+            (200, 200, 200),
+            1,
+            cv2.LINE_AA,
+        )
+        
+        cv2.imshow(window_name, img)
+        
+        key = cv2.waitKey(0) & 0xFF
+        
+        if key == 27:  # ESC key
+            cv2.destroyWindow(window_name)
+            return None
+        elif key == 13:  # ENTER key
+            if len(user_name.strip()) > 0:
+                cv2.destroyWindow(window_name)
+                return user_name.strip()
+            # If name is empty, continue
+        elif key == 8 or key == 127:  # Backspace or Delete
+            if len(user_name) > 0:
+                user_name = user_name[:-1]
+        elif 32 <= key <= 126:  # Printable ASCII characters
+            if len(user_name) < 30:  # Limit name length
+                user_name += chr(key)
+
+
+def save_color_strip(history_strip: np.ndarray, user_name: str) -> None:
+    """
+    Stop on a review screen (legend + final strip), then save on confirmation.
+    """
+    if history_strip is None or history_strip.size == 0:
+        print("No color strip to save.")
+        return
+    
+    # Build a review screen (legend + final strip) that stays up until the user decides.
+    legend_width, legend_height = 500, 400
+    review_window = "Review - Legend & Final Color Strip"
+    cv2.namedWindow(review_window, cv2.WINDOW_NORMAL)
+    
+    # Create legend image
+    legend_img = np.zeros((legend_height, legend_width, 3), dtype=np.uint8)
+    legend_img[:] = (40, 40, 40)
+    
+    # Legend title
+    title = "Color Meanings:"
+    title_size = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
+    title_x = (legend_width - title_size[0]) // 2
+    cv2.putText(
+        legend_img,
+        title,
+        (title_x, 50),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    
+    # Legend items
+    legend_items = [
+        ("Dark gray", EMOTION_COLORS["none"], "No face detected"),
+        ("Sage blossom", EMOTION_COLORS["neutral"], "Neutral"),
+        ("Peony peach", EMOTION_COLORS["happy"], "Happy"),
+        ("Burgundy rose", EMOTION_COLORS["angry"], "Angry"),
+    ]
+    
+    y_start = 120
+    for i, (color_name, bgr_color, emotion) in enumerate(legend_items):
+        y_pos = y_start + i * 70
+        
+        # Color swatch
+        cv2.rectangle(
+            legend_img,
+            (50, y_pos - 20),
+            (120, y_pos + 20),
+            bgr_color,
+            -1,
+        )
+        cv2.rectangle(
+            legend_img,
+            (50, y_pos - 20),
+            (120, y_pos + 20),
+            (255, 255, 255),
+            1,
+        )
+        
+        # Color name and emotion
+        cv2.putText(
+            legend_img,
+            f"{color_name} - {emotion}",
+            (140, y_pos + 5),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+    # Create a larger preview of the final color strip for visibility
+    strip_h, strip_w = history_strip.shape[:2]
+    if strip_w <= 0:
+        cv2.destroyWindow(review_window)
+        print("No color strip to save.")
+        return
+    preview_w = legend_width
+    preview_h = max(120, int(round(strip_h * (preview_w / float(strip_w)) * 6.0)))
+    strip_preview = cv2.resize(history_strip, (preview_w, preview_h), interpolation=cv2.INTER_NEAREST)
+
+    footer_h = 70
+    canvas_h = legend_height + 12 + preview_h + footer_h
+    canvas_w = legend_width
+    canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
+    canvas[:] = (30, 30, 30)
+
+    canvas[0:legend_height, 0:legend_width] = legend_img
+    canvas[legend_height + 12 : legend_height + 12 + preview_h, 0:legend_width] = strip_preview
+
+    instructions = "Press 's' (or ENTER) to SAVE | Press 'q' (or ESC) to cancel"
+    cv2.putText(
+        canvas,
+        instructions,
+        (10, canvas_h - 25),
+        cv2.FONT_HERSHEY_DUPLEX,
+        0.5,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+
+    # Wait for explicit user confirmation before saving
+    while True:
+        cv2.imshow(review_window, canvas)
+        key = cv2.waitKey(0) & 0xFF
+        if key in (ord("s"), 13):  # 's' or ENTER
+            break
+        if key in (ord("q"), 27):  # 'q' or ESC
+            cv2.destroyWindow(review_window)
+            print("Save cancelled.")
+            return
+
+    cv2.destroyWindow(review_window)
+
+    # Save color strip only (name is in the filename)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = "".join(c for c in user_name if c.isalnum() or c in (' ', '-', '_')).strip()
+    filename = f"{safe_name}_color_strip_{timestamp}.png"
+    cv2.imwrite(filename, history_strip)
+    print(f"\nColor strip saved as: {filename}")
+    print(f"Saved in: {os.path.abspath(filename)}")
+
+
 def _open_webcam() -> Optional[cv2.VideoCapture]:
     """
     Try to open a working webcam. On macOS, index 0 may be a Continuity Camera
@@ -567,6 +869,20 @@ def _open_webcam() -> Optional[cv2.VideoCapture]:
 
 
 def main():
+    # Show welcome screen
+    if not show_welcome_screen():
+        print("Welcome screen closed. Exiting.")
+        return
+    
+    # Get user name
+    user_name = get_user_name()
+    if user_name is None:
+        print("Name input cancelled. Exiting.")
+        return
+    
+    print(f"Welcome, {user_name}!")
+    
+    # Open webcam
     cap = _open_webcam()
 
     if cap is None:
@@ -582,6 +898,7 @@ def main():
     face_cascade = cv2.CascadeClassifier(face_cascade_path)
     if face_cascade.empty():
         print(f"Error: Could not load face cascade from {face_cascade_path}")
+        cap.release()
         return
 
     # Load dlib facial landmark predictor (68-point model)
@@ -591,6 +908,7 @@ def main():
     except RuntimeError:
         print(f"Error: Could not load dlib shape predictor from '{predictor_path}'.")
         print("Make sure the file exists in the project directory.")
+        cap.release()
         return
 
     # History of recent emotion labels for smoothing
@@ -602,9 +920,15 @@ def main():
     # Debug mode toggle
     debug_mode = False
 
-    print("Press 'q' to quit, 'c' to calibrate, 'd' to toggle debug mode.")
-    print("IMPORTANT: Press 'c' first to calibrate with a neutral expression!")
-    print("Then try: smiling (yellow), furrowing eyebrows (red), or neutral (blue)")
+    # Automatically start calibration
+    print("\nStarting calibration...")
+    if not calibrate_baseline(cap, face_cascade, predictor, baseline):
+        print("Calibration failed or was cancelled. Exiting.")
+        cap.release()
+        cv2.destroyAllWindows()
+        return
+
+    print("\nPress 's' to stop (review legend + final strip, then save), 'd' to toggle debug mode, 'q' to quit without saving.")
 
     # Parameters for emotion history strip
     history_height = 40
@@ -705,31 +1029,30 @@ def main():
             history_strip[:, 0:-1] = history_strip[:, 1:]
             history_strip[:, -1] = EMOTION_COLORS["none"]
 
-        # Emotion label hidden from user
-        
-        # Show calibration status
-        if not baseline.calibrated:
-            cv2.putText(
-                frame,
-                "NOT CALIBRATED - Press 'c'",
-                (10, frame.shape[0] - 20),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 0, 255),
-                2,
-                cv2.LINE_AA,
-            )
-
         # Combine the camera frame with the emotion history strip
         frame_with_history = np.vstack((frame, history_strip))
+
+        # Draw instructions on the interface
+        instructions = "Press 's' to stop (review legend + final strip, then save), 'd' to toggle debug mode, 'q' to quit without saving."
+        cv2.putText(
+            frame_with_history,
+            instructions,
+            (10, frame_with_history.shape[0] - 8),
+            cv2.FONT_HERSHEY_DUPLEX,
+            0.5,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
 
         cv2.imshow("Facial Emotion Demo", frame_with_history)
 
         key = cv2.waitKey(1) & 0xFF
-        if key == ord("q"):
+        if key == ord("s"):  # Stop and save
+            save_color_strip(history_strip, user_name)
             break
-        elif key == ord("c"):
-            calibrate_baseline(cap, face_cascade, predictor, baseline)
+        elif key == ord("q"):  # Quit without saving
+            break
         elif key == ord("d"):
             debug_mode = not debug_mode
             print(f"Debug mode: {'ON' if debug_mode else 'OFF'}")
