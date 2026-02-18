@@ -287,8 +287,8 @@ def _collect_calibration_samples(
         if not ret:
             print(f"Error: Failed to read frame during {expression_name} calibration.")
             return None
-        frame = cv2.flip(frame, 1)
-
+        
+        frame = cv2.flip(frame, 1)  # Flip horizontally to match main view
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(
             gray,
@@ -571,6 +571,10 @@ def main():
 
     if cap is None:
         print("Error: Could not open webcam.")
+        print("  - On macOS: if you use Continuity Camera (iPhone), try disconnecting it")
+        print("    or ensure the built-in camera is selected in System Settings.")
+        print("  - Check that no other app is exclusively using the camera.")
+        print("  - Grant camera permission to Terminal (or your IDE) in System Settings > Privacy.")
         return
 
     # Load Haar cascade for face detection
@@ -701,17 +705,7 @@ def main():
             history_strip[:, 0:-1] = history_strip[:, 1:]
             history_strip[:, -1] = EMOTION_COLORS["none"]
 
-        # Draw current emotion text on the frame
-        cv2.putText(
-            frame,
-            f"Emotion: {smoothed_emotion}",
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            color,
-            2,
-            cv2.LINE_AA,
-        )
+        # Emotion label hidden from user
         
         # Show calibration status
         if not baseline.calibrated:
